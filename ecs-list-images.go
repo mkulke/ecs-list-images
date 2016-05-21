@@ -10,12 +10,27 @@ import (
 	"os"
 )
 
-var cluster string
+const maxResults = 64
 
-func listTasks(svc *ecs.ECS) ([]*string, error) {
+var selectedCluster string
+
+func listClusters(svc *ecs.ECS) ([]*string, error) {
+	params := &ecs.ListClustersInput{
+		MaxResults: aws.Int64(maxResults),
+	}
+
+	resp, err := svc.ListClusters(params)
+	if err != nil {
+		return nil, err
+	}
+
+	return resp.ClusterArns, nil
+}
+
+func listTasks(svc *ecs.ECS, cluster string) ([]*string, error) {
 	params := &ecs.ListTasksInput{
-		Cluster:    aws.String("default"),
-		MaxResults: aws.Int64(64),
+		Cluster:    aws.String(cluster),
+		MaxResults: aws.Int64(maxResults),
 	}
 
 	resp, err := svc.ListTasks(params)
@@ -67,37 +82,80 @@ func getTaskDefinitions(svc *ecs.ECS, tasks []*string) ([]*string, error) {
 	return definitions, nil
 }
 
-type Output struct {
-	Images []string `json:"images"`
-}
-
-func main() {
-	flag.StringVar(&cluster, "cluster", os.Getenv("ECS_CLUSTER"), "ecs cluster")
-	flag.Parse()
-
-	if cluster == "" {
-		flag.PrintDefaults()
-		os.Exit(1)
-	}
-
-	svc := ecs.New(session.New())
-
-	tasks, err := listTasks(svc)
+func getImagesForCluster(svc *ecs.ECS, cluster string) ([]string, error) {
+	tasks, err := listTasks(svc, cluster)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	definitions, err := getTaskDefinitions(svc, tasks)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	images, err := getImages(svc, definitions)
 	if err != nil {
+		return nil, err
+	}
+
+	return images, nil
+}
+
+func makeUnique(arr []string) []string {
+	set := make(map[string]struct{})
+	for _, entry := range arr {
+		set[entry] = struct{}{}
+	}
+	uniqueArr := []string{}
+	for entry := range set {
+		uniqueArr = append(uniqueArr, entry)
+	}
+	return uniqueArr
+}
+
+func containsCluster(clusters []*string, cluster string) bool {
+	for _, _cluster := range clusters {
+		if cluster == *_cluster {
+			return true
+		}
+	}
+	return false
+}
+
+type output struct {
+	Images []string `json:"images"`
+}
+
+func main() {
+	flag.StringVar(&selectedCluster, "cluster", os.Getenv("ECS_CLUSTER"), "ecs cluster")
+	flag.Parse()
+
+	svc := ecs.New(session.New())
+
+	clusters, err := listClusters(svc)
+	if err != nil {
 		panic(err)
 	}
 
-	output := Output{images}
+	if selectedCluster != "" {
+		if !containsCluster(clusters, selectedCluster) {
+			fmt.Printf("Cluster %s not found.\n", selectedCluster)
+			os.Exit(1)
+		}
+		clusters = []*string{&selectedCluster}
+	}
+
+	images := []string{}
+	for _, cluster := range clusters {
+		clusterImages, err := getImagesForCluster(svc, *cluster)
+		if err != nil {
+			panic(err)
+		}
+		images = append(images, clusterImages...)
+	}
+	images = makeUnique(images)
+
+	output := output{images}
 	bytes, err := json.Marshal(output)
 	if err != nil {
 		panic(err)

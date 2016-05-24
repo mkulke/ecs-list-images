@@ -60,9 +60,13 @@ func getImages(svc *ecs.ECS, definitions []*string) ([]string, error) {
 	return images, nil
 }
 
-func getTaskDefinitions(svc *ecs.ECS, tasks []*string) ([]*string, error) {
+func getTaskDefinitions(svc *ecs.ECS, cluster string, tasks []*string) ([]*string, error) {
+  if len(tasks) == 0 {
+    return []*string{}, nil
+  }
+
 	params := &ecs.DescribeTasksInput{
-		Cluster: aws.String("default"),
+		Cluster: aws.String(cluster),
 		Tasks:   tasks,
 	}
 	resp, err := svc.DescribeTasks(params)
@@ -88,7 +92,7 @@ func getImagesForCluster(svc *ecs.ECS, cluster string) ([]string, error) {
 		return nil, err
 	}
 
-	definitions, err := getTaskDefinitions(svc, tasks)
+	definitions, err := getTaskDefinitions(svc, cluster, tasks)
 	if err != nil {
 		return nil, err
 	}
